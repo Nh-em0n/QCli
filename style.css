@@ -1,12 +1,13 @@
   * { box-sizing: border-box; }
   :root {
+    color-scheme: dark; /* JS switches this to light for light themes */
     --bg:#1e1e2e; --fg:#cdd6f4; --surface:#181825; --surface-2:#313244;
     --border:#313244; --muted:#6c7086; --muted-2:#585b70; --text-soft:#a6adc8;
     --accent:#c678dd; --blue:#61afef; --green:#a6e3a1; --red:#f38ba8; --yellow:#f9e2af;
     --ansi-black:#3b4252; --ansi-red:#e06c75; --ansi-green:#98c379; --ansi-yellow:#e5c07b;
     --ansi-blue:#61afef; --ansi-magenta:#c678dd; --ansi-cyan:#56b6c2; --ansi-white:#d8dee9; --ansi-gray:#6c7086;
     --font:'Menlo','Consolas','Liberation Mono',monospace; --font-size:13px; --line-height:1.45;
-    --caret:#cdd6f4; --scroll-thumb:#585b70; --scroll-hover:#7f849c; --scroll-track:#181825;
+    --caret:#cdd6f4; --outline:#c678dd; --scroll-thumb:#585b70; --scroll-hover:#7f849c; --scroll-track:#181825;
   }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
@@ -106,7 +107,7 @@
     border-bottom: 1px solid var(--border); padding-bottom: 5px;
   }
   .up-head > span:nth-child(2), .up-head > span:nth-child(3) { text-align: right; }
-  .up-row:nth-child(odd) { background: rgba(255,255,255,.025); }
+  .up-row:nth-child(odd) { background: color-mix(in srgb, var(--fg) 3%, transparent); }
   .up-size { color: var(--muted); text-align: right; }
   .up-status { text-align: right; }
   .up-pending { color: var(--yellow); }
@@ -196,7 +197,7 @@
   /* ── preferences modal ── */
   .pref-modal { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.55); }
   .pref-modal[hidden] { display: none; }
-  .pref-card { width: min(520px, 92%); max-height: 88%; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5); font-size: 12px; }
+  .pref-card { width: min(520px, 92%); max-height: 88%; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; outline: 2px solid var(--outline); outline-offset: 1px; box-shadow: 0 20px 60px rgba(0,0,0,.5); font-size: 12px; }
   .pref-head, .pref-foot { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
   .pref-foot { border-bottom: none; border-top: 1px solid var(--border); }
   .pref-head strong { font-size: 13px; color: var(--fg); }
@@ -221,6 +222,11 @@
   .pref-warn {
     color: var(--muted); font-size: 11px; line-height: 1.5;
     margin: 5px 0 0 20px; max-width: 420px;
+  }
+
+  /* keyboard focus ring — colour comes from the Outline colour preference */
+  :where(button, select, input):not(.term-input):focus-visible {
+    outline: 2px solid var(--outline); outline-offset: 2px;
   }
 
   /* ── nano-like editor ── */

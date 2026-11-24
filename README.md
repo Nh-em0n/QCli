@@ -387,13 +387,16 @@ Preference keys:
 
 | Key | Values |
 |---|---|
-| `theme` | `catppuccin`, `github-dark`, `github-light`, `light`, `atom`, `dracula`, `nord` |
+| `theme` | `github-light` (default), `light`, `one-light`, `gruvbox-light`, `nord-light`, `ayu-light`, `catppuccin`, `github-dark`, `atom`, `dracula`, `nord` |
 | `fontFamily` / `font` | `menlo`, `jetbrains`, `fira`, `source`, `courier`, `system`, or a custom CSS font stack |
 | `fontSize` | `10`–`22` (px) |
 | `lineHeight` | `1.1`–`2` |
 | `uploadConcurrency` | `1`–`10`, files uploaded at a time (default `3`) |
-| `caretColor` | `#rrggbb` |
+| `caretColor` | `#rrggbb` or `auto` (defaults to the theme's text colour) |
+| `outlineColor` | `#rrggbb` or `auto` (keyboard focus rings; defaults to the theme's accent) |
 | `wrap`, `animations`, `autoScroll`, `statusBar`, `banner`, `timestamps`, `hints`, `syncUrl`, `autolog` | `on` / `off` (all default `on` except `syncUrl` and `autolog`, which default `off`) |
+
+Light themes are `github-light`, `light`, `one-light`, `gruvbox-light`, `nord-light` and `ayu-light`; switch with `prefs theme <id>` or the gear icon (Ctrl+,). Native form controls and scrollbars follow the theme's light/dark colour scheme.
 
 ### Repositories and branches
 

@@ -95,12 +95,28 @@ const THEMES = {
     ansi: { black:'#484f58', red:'#f85149', green:'#3fb950', yellow:'#d29922', blue:'#58a6ff', magenta:'#bc8cff', cyan:'#39c5cf', white:'#c9d1d9', gray:'#8b949e' }
   },
   'github-light': {
-    name: 'GitHub Light', vars: { bg:'#ffffff', fg:'#24292f', surface:'#f6f8fa', 'surface-2':'#eaeef2', border:'#d0d7de', muted:'#57606a', 'muted-2':'#8c959f', 'text-soft':'#424a53', accent:'#8250df', blue:'#0969da', green:'#1a7f37', red:'#cf222e', yellow:'#9a6700', 'scroll-thumb':'#afb8c1', 'scroll-hover':'#8c959f', 'scroll-track':'#f6f8fa', caret:'#24292f' },
-    ansi: { black:'#d0d7de', red:'#cf222e', green:'#1a7f37', yellow:'#9a6700', blue:'#0969da', magenta:'#8250df', cyan:'#0550ae', white:'#24292f', gray:'#57606a' }
+    light: true, name: 'GitHub Light', vars: { bg:'#ffffff', fg:'#1f2328', surface:'#f6f8fa', 'surface-2':'#eaeef2', border:'#d0d7de', muted:'#59636e', 'muted-2':'#818b98', 'text-soft':'#424a53', accent:'#8250df', blue:'#0969da', green:'#1a7f37', red:'#cf222e', yellow:'#9a6700', 'scroll-thumb':'#afb8c1', 'scroll-hover':'#8c959f', 'scroll-track':'#f6f8fa', caret:'#1f2328' },
+    ansi: { black:'#d0d7de', red:'#cf222e', green:'#1a7f37', yellow:'#9a6700', blue:'#0969da', magenta:'#8250df', cyan:'#0550ae', white:'#1f2328', gray:'#59636e' }
   },
   light: {
-    name: 'Light (Solarized)', vars: { bg:'#fdf6e3', fg:'#657b83', surface:'#eee8d5', 'surface-2':'#e9e2cc', border:'#d3c6aa', muted:'#93a1a1', 'muted-2':'#a8a094', 'text-soft':'#586e75', accent:'#6c71c4', blue:'#268bd2', green:'#859900', red:'#dc322f', yellow:'#b58900', 'scroll-thumb':'#c9bda3', 'scroll-hover':'#a89c80', 'scroll-track':'#eee8d5', caret:'#657b83' },
+    light: true, name: 'Light (Solarized)', vars: { bg:'#fdf6e3', fg:'#657b83', surface:'#eee8d5', 'surface-2':'#e9e2cc', border:'#d3c6aa', muted:'#93a1a1', 'muted-2':'#a8a094', 'text-soft':'#586e75', accent:'#6c71c4', blue:'#268bd2', green:'#859900', red:'#dc322f', yellow:'#b58900', 'scroll-thumb':'#c9bda3', 'scroll-hover':'#a89c80', 'scroll-track':'#eee8d5', caret:'#657b83' },
     ansi: { black:'#d3c6aa', red:'#dc322f', green:'#859900', yellow:'#b58900', blue:'#268bd2', magenta:'#6c71c4', cyan:'#2aa198', white:'#657b83', gray:'#93a1a1' }
+  },
+  'one-light': {
+    light: true, name: 'One Light', vars: { bg:'#ffffff', fg:'#383a42', surface:'#fafafa', 'surface-2':'#eaeef2', border:'#d4d4d4', muted:'#6b7681', 'muted-2':'#8d959c', 'text-soft':'#4b4d56', accent:'#a626a4', blue:'#3563d6', green:'#2f7d32', red:'#c4382d', yellow:'#9a6a00', 'scroll-thumb':'#c7c7c7', 'scroll-hover':'#a0a0a0', 'scroll-track':'#fafafa', caret:'#383a42' },
+    ansi: { black:'#d4d4d4', red:'#c4382d', green:'#2f7d32', yellow:'#9a6a00', blue:'#3563d6', magenta:'#a626a4', cyan:'#01779f', white:'#383a42', gray:'#6b7681' }
+  },
+  'gruvbox-light': {
+    light: true, name: 'Gruvbox Light', vars: { bg:'#fbf1c7', fg:'#3c3836', surface:'#f2e5bc', 'surface-2':'#ebdbb2', border:'#d5c4a1', muted:'#6f6257', 'muted-2':'#8a7b6e', 'text-soft':'#504945', accent:'#8f3f71', blue:'#076678', green:'#6b6708', red:'#9d0006', yellow:'#96600d', 'scroll-thumb':'#bdae93', 'scroll-hover':'#a89984', 'scroll-track':'#f2e5bc', caret:'#3c3836' },
+    ansi: { black:'#d5c4a1', red:'#9d0006', green:'#6b6708', yellow:'#96600d', blue:'#076678', magenta:'#8f3f71', cyan:'#427b58', white:'#3c3836', gray:'#6f6257' }
+  },
+  'nord-light': {
+    light: true, name: 'Nord Light', vars: { bg:'#fafafa', fg:'#4c566a', surface:'#eceff4', 'surface-2':'#e5e9f0', border:'#d8dee9', muted:'#667389', 'muted-2':'#8792a8', 'text-soft':'#434c5e', accent:'#8b5682', blue:'#4c6d96', green:'#4a7757', red:'#a94c55', yellow:'#8c6b1f', 'scroll-thumb':'#b8c0cc', 'scroll-hover':'#9aa5b8', 'scroll-track':'#eceff4', caret:'#4c566a' },
+    ansi: { black:'#d8dee9', red:'#a94c55', green:'#4a7757', yellow:'#8c6b1f', blue:'#4c6d96', magenta:'#8b5682', cyan:'#4a7582', white:'#4c566a', gray:'#667389' }
+  },
+  'ayu-light': {
+    light: true, name: 'Ayu Light', vars: { bg:'#f8f9fa', fg:'#5c6166', surface:'#f0f2f3', 'surface-2':'#e4e8ea', border:'#d5dbde', muted:'#68737e', 'muted-2':'#8d969c', 'text-soft':'#636c73', accent:'#8250a8', blue:'#226da8', green:'#34773b', red:'#bd394a', yellow:'#8e6500', 'scroll-thumb':'#c1c9cd', 'scroll-hover':'#a6afb5', 'scroll-track':'#f0f2f3', caret:'#5c6166' },
+    ansi: { black:'#d5dbde', red:'#bd394a', green:'#34773b', yellow:'#8e6500', blue:'#226da8', magenta:'#8250a8', cyan:'#247777', white:'#5c6166', gray:'#68737e' }
   },
   atom: {
     name: 'Atom One Dark', vars: { bg:'#282c34', fg:'#abb2bf', surface:'#21252b', 'surface-2':'#383a42', border:'#3b4048', muted:'#7f848e', 'muted-2':'#636b78', 'text-soft':'#9da7b3', accent:'#c678dd', blue:'#61afef', green:'#98c379', red:'#e06c75', yellow:'#e5c07b', 'scroll-thumb':'#4b5263', 'scroll-hover':'#616a7d', 'scroll-track':'#21252b', caret:'#abb2bf' },
@@ -126,8 +142,8 @@ const FONTS = {
 };
 
 const DEFAULT_PREFS = {
-  theme: 'catppuccin', fontFamily: 'menlo', fontSize: 13, lineHeight: 1.45,
-  caretColor: null, wrap: true, animations: true, autoScroll: true,
+  theme: 'github-light', fontFamily: 'menlo', fontSize: 13, lineHeight: 1.45,
+  caretColor: null, outlineColor: null, wrap: true, animations: true, autoScroll: true,
   statusBar: true, banner: true, timestamps: false, hints: true,
   syncUrl: false,  // opt-in only: putting the token in the address bar is risky
   autolog: false,  // automatically list a folder after cd
@@ -990,13 +1006,15 @@ class QCli {
 
   applyPrefs() {
     const root = document.documentElement.style;
-    const theme = THEMES[this.prefs.theme] || THEMES.catppuccin;
+    const theme = THEMES[this.prefs.theme] || THEMES[DEFAULT_PREFS.theme];
     for (const [k, v] of Object.entries(theme.vars)) root.setProperty(`--${k}`, v);
     for (const [k, v] of Object.entries(theme.ansi)) root.setProperty(`--ansi-${k}`, v);
+    root.setProperty('color-scheme', theme.light ? 'light' : 'dark');
     root.setProperty('--font', FONTS[this.prefs.fontFamily] || this.prefs.fontFamily || FONTS.menlo);
     root.setProperty('--font-size', `${this.prefs.fontSize}px`);
     root.setProperty('--line-height', String(this.prefs.lineHeight));
     root.setProperty('--caret', this.prefs.caretColor || theme.vars.caret);
+    root.setProperty('--outline', this.prefs.outlineColor || theme.vars.accent);
 
     document.body.classList.toggle('no-wrap', !this.prefs.wrap);
     document.body.classList.toggle('no-anim', !this.prefs.animations);
@@ -1016,9 +1034,11 @@ class QCli {
       this.prefs.theme = raw;
     } else if (key === 'fontFamily' || key === 'font') {
       this.prefs.fontFamily = FONTS[raw] ? raw : String(raw);
-    } else if (key === 'caretColor') {
-      if (!/^#[0-9a-f]{6}$/i.test(raw)) { this.err('Caret colour must be #rrggbb'); return false; }
-      this.prefs.caretColor = raw;
+    } else if (key === 'caretColor' || key === 'outlineColor') {
+      const label = key === 'caretColor' ? 'Caret' : 'Outline';
+      if (/^(auto|theme|default)$/i.test(String(raw))) this.prefs[key] = null;
+      else if (/^#[0-9a-f]{6}$/i.test(raw)) this.prefs[key] = raw;
+      else { this.err(`${label} colour must be #rrggbb or auto`); return false; }
     } else if (boolKeys.includes(key)) {
       if (typeof raw === 'boolean') this.prefs[key] = raw;
       else if (/^(on|true|yes|1)$/i.test(raw)) this.prefs[key] = true;
@@ -1067,7 +1087,10 @@ class QCli {
             <label>Font size <span data-val="fontSize"></span><input type="range" data-key="fontSize" min="10" max="22" step="1"></label>
             <label>Line height <span data-val="lineHeight"></span><input type="range" data-key="lineHeight" min="1.1" max="2" step="0.05"></label>
           </div>
-          <label>Caret colour<input type="color" data-key="caretColor"></label>
+          <div class="pref-row">
+            <label>Caret colour<input type="color" data-key="caretColor"></label>
+            <label>Outline colour<input type="color" data-key="outlineColor"></label>
+          </div>
           <label>Upload parallelism <span data-val="uploadConcurrency"></span><input type="range" data-key="uploadConcurrency" min="1" max="10" step="1"></label>
           <div class="pref-checks">
             ${check('wrap', 'Word wrap')}
@@ -1131,6 +1154,9 @@ class QCli {
         if (label) label.textContent = key === 'fontSize' ? `${this.prefs[key]}px`
           : key === 'uploadConcurrency' ? `${this.prefs[key]} files`
           : this.prefs[key].toFixed(2);
+      } else if (el.type === 'color') {
+        const theme = THEMES[this.prefs.theme] || THEMES[DEFAULT_PREFS.theme];
+        el.value = this.prefs[key] || (key === 'caretColor' ? theme.vars.caret : theme.vars.accent);
       } else el.value = this.prefs[key];
     }
   }
