@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QCli — enhanced browser terminal</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="boot-error" class="boot-error" hidden>
+    <strong>The terminal could not start.</strong>
+    <p>
+      Make sure <code>repo.js</code> and <code>app.js</code> are in the same folder as
+      <code>index.html</code>, and that JavaScript is enabled.
+    </p>
+    <p class="boot-note">Open the browser console for details.</p>
+  </div>
+
+  <noscript>
+    <div class="boot-error">JavaScript must be enabled to use QCli.</div>
+  </noscript>
+
+  <script>
+    // Show a helpful message instead of a blank page if the scripts fail to boot.
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (!window.__QCLI__) {
+          var el = document.getElementById('boot-error');
+          if (el) el.hidden = false;
+        }
+      }, 1000);
+    });
+  </script>
+
+  <!-- Load order matters: the UI script uses GitHubRepo from repo.js. -->
+  <script src="./repo.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
