@@ -141,6 +141,41 @@
     padding: 1px 5px; border-radius: 3px;
   }
 
+  /* numbered, syntax-highlighted text files from `show` */
+  .term-view--code { width: 100%; max-width: 100%; white-space: normal; }
+  .code-copy {
+    float: right; margin: -3px 0 0 12px;
+    background: var(--surface-2); color: var(--text-soft);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .code-copy:hover { background: var(--border); color: var(--fg); }
+  .code-copy:focus-visible { outline: 2px solid var(--outline); outline-offset: 1px; }
+  .code-view { min-height: 150px; overflow-x: hidden; white-space: normal; }
+  .code-line { display: flex; width: 100%; align-items: flex-start; }
+  .code-line:hover { background: var(--surface-2); }
+  .code-ln {
+    flex: 0 0 auto; width: 5ch; padding-right: 1.5ch; text-align: right;
+    color: var(--muted-2); user-select: none; white-space: pre;
+    border-right: 1px solid var(--border);
+  }
+  .code-src {
+    flex: 1; min-width: 0; padding-left: 1.2ch;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    font-size: max(var(--font-size), 14px);
+  }
+  .tok-com { color: var(--muted); font-style: italic; }
+  .tok-str { color: var(--green); }
+  .tok-num, .tok-var { color: var(--yellow); }
+  .tok-kw { color: var(--accent); }
+  .tok-lit, .tok-fn { color: var(--blue); }
+  .tok-prop, .tok-attr { color: var(--ansi-cyan); }
+  .tok-tag { color: var(--red); }
+  .tok-punc { color: var(--text-soft); }
+  .tok-strong { color: var(--fg); font-weight: bold; }
+  .tok-add { color: var(--green); }
+  .tok-del { color: var(--red); }
+
   .jump-bottom {
     position: absolute; right: 26px; bottom: 62px; z-index: 6;
     background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
@@ -242,6 +277,10 @@
     box-shadow: 0 20px 60px rgba(0,0,0,.6);
     font-family: var(--font); font-size: var(--font-size); line-height: var(--line-height);
   }
+  /* On wide screens give the editor half the viewport instead of a narrow card. */
+  @media (min-width: 1200px) {
+    .editor-card { width: 50vw; height: min(720px, 88vh); }
+  }
   .editor-modal :focus, .editor-modal :focus-visible { outline: none; }
   .editor-head {
     display: flex; align-items: center; gap: 12px; padding: 8px 12px;
@@ -252,16 +291,27 @@
   .editor-x { background: none; border: 0; color: var(--fg); font-size: 18px; cursor: pointer; line-height: 1; }
   .editor-x:hover { color: var(--red); }
   .editor-body { flex: 1; display: flex; min-height: 0; }
+  .editor-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
   .editor-gutter {
     padding: 10px 8px 10px 12px; text-align: right; color: var(--muted-2);
     background: var(--surface); border-right: 1px solid var(--border);
-    white-space: pre; overflow: hidden; user-select: none;
+    overflow: hidden; user-select: none;
   }
+  .editor-gutter .gutter-num { display: block; }
   .editor-area {
-    flex: 1; resize: none; border: 0; outline: 0; padding: 10px 12px;
+    flex: 1; min-width: 0; resize: none; border: 0; outline: 0; padding: 10px 12px;
     background: var(--bg); color: var(--fg);
     font: inherit; line-height: inherit; tab-size: 2;
-    white-space: pre; overflow: auto;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable;
+  }
+  /* Invisible twin of the textarea; used only to measure wrapped line heights. */
+  .editor-measure {
+    position: absolute; inset: 0; visibility: hidden; pointer-events: none;
+    padding: 10px 12px; border: 0;
+    font: inherit; line-height: inherit; tab-size: 2;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    overflow-y: scroll; scrollbar-gutter: stable;
   }
   .editor-save {
     display: flex; flex-direction: column; gap: 8px;

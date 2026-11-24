@@ -150,6 +150,23 @@ const DEFAULT_PREFS = {
   uploadConcurrency: 3  // files in flight at once for put / putdir
 };
 
+/* Guest mode: public, read-only GitHub access. Anything not on this list
+   mutates data or needs a token, so it is blocked before reaching the API. */
+const GUEST_READ_COMMANDS = new Set([
+  'help', '?', 'clear', 'cls', 'history', 'sleep', 'demo',
+  'prefs', 'pref', 'settings', 'exit', 'quit', 'logout',
+  'repos', 'select', 'branch', 'open', 'commits', 'log', 'pwd', 'cd',
+  'autolog', 'autols', '..', '...', 'tree', 'ls', 'll', 'lt',
+  'cat', 'show', 'view', 'preview', 'info', 'download', 'get',
+  'head', 'tail', 'wc', 'find', 'grep', 'stat', 'chmod',
+  'issues', 'pulls', 'workflows', 'runs', 'run', 'search',
+  'releases', 'user', 'rate', 'rate_limit', 'ratelimit'
+]);
+const GUEST_READ_REPO_SUBS = new Set([
+  'info', 'branches', 'tags', 'releases', 'collaborators', 'issues',
+  'pulls', 'commits', 'contributors', 'languages', 'license'
+]);
+
 const PREFS_KEY = 'qcli.prefs.v1';
 function loadPrefs() {
   try { const raw = localStorage.getItem(PREFS_KEY); return raw ? JSON.parse(raw) : {}; }
@@ -186,9 +203,16 @@ class QCli {
     /* Blob URLs created by `show` for inline images/PDF/media. Revoked on clear. */
     this._objectUrls = [];
 
+    /* Raw text of code views, keyed by id, for the header's Copy button. */
+    this._codeViews = new Map();
+    this._codeViewSeq = 0;
+
     this.running  = false;
     this._pending = null;
     this._histIdx = -1;
+    this._reauth = false;         // `exit` / `logout` asks for credentials again
+    this._lastUsername = null;    // prefill the username on re-auth
+    this.guest = false;           // no token: public read-only access
 
     /* sequential execution / UX state */
     this.busy        = false;
@@ -210,6 +234,8 @@ class QCli {
     this.outEl = null; this.promptEl = null; this.inputEl = null;
     this.suggestEl = null; this.statusEl = null; this.jumpEl = null;
     this._groupEl = null;   // current command/output group
+    this._lastFind = { pattern: '', hits: [] };   // numbered refs from the last `find`
+    this._lastRepos = [];                         // numbered refs from the last `repos`
 
     /* output scrolling */
     this._stickToBottom = true;
@@ -319,6 +345,8 @@ class QCli {
         }
       }
     }
+    /* A bare #username hash is guest access (no token). */
+    if (!compact && hash && !hash.includes('@')) cfg.username = decode(hash.split('/')[0]);
     return cfg;
   }
 
@@ -331,23 +359,32 @@ class QCli {
         this.username = cfg.username;
         this.token = cfg.token;
         source = 'the URL';
+      } else if (cfg.username) {
+        this.username = cfg.username; this.guest = true;
+        source = 'the URL';
       } else if (window.__QCLI_USER__ && window.__QCLI_TOKEN__) {
         this.username = window.__QCLI_USER__;
         this.token    = window.__QCLI_TOKEN__;
         source = 'window.__QCLI_USER__ / window.__QCLI_TOKEN__';
+      } else if (window.__QCLI_USER__) {
+        this.username = window.__QCLI_USER__; this.guest = true;
+        source = 'window.__QCLI_USER__';
       } else if (window.__GH_USER__ && window.__GH_TOKEN__) {
         this.username = window.__GH_USER__;
         this.token    = window.__GH_TOKEN__;
         source = 'window.__GH_USER__ / window.__GH_TOKEN__ (legacy)';
+      } else if (window.__GH_USER__) {
+        this.username = window.__GH_USER__; this.guest = true;
+        source = 'window.__GH_USER__ (legacy)';
       }
 
       if (source) {
-        this.info(`Using credentials from ${source}.`);
+        this.info(`${this.guest ? 'Guest access' : 'Using credentials'} from ${source}.`);
         await this.validateToken();
       } else {
         await this.authenticate();
       }
-      this.ok(`Signed in as ${C.bold}${this.username}${C.reset}`);
+      this.announceSignIn();
       this.info('Type "help" for commands. Tab autocompletes. Use && to chain.');
       this.running = true;
 
@@ -362,6 +399,18 @@ class QCli {
       await this.loop();
     } catch (e) {
       this.err(`Startup failed: ${(e && e.message) || e}`);
+      if (!this._pending) {
+        /* Never leave a dead prompt on screen. Retry sign-in if credentials
+           failed, otherwise just resume the command loop. */
+        if (!this.running) {
+          this._lastUsername = this.username || this._lastUsername;
+          this.token = null;
+          this.guest = false;
+          this.github.setCredentials(null, null);
+          this._reauth = true;
+        }
+        await this.loop();
+      }
     }
   }
 
@@ -453,6 +502,14 @@ class QCli {
       } else this.info(`Path: ${p}`);
     });
 
+    this.outEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.code-copy');
+      if (!btn) return;
+      e.preventDefault();
+      const text = this._codeViews.get(btn.dataset.codeId);
+      if (text != null) this.copyCodeText(text, btn);
+    });
+
     this.updateStatus();
   }
 
@@ -470,7 +527,19 @@ class QCli {
         this.hideSuggest();
         return;
       }
-      if (!this._pending) return;
+      if (!this._pending) {
+        /* Startup or a previous command may have stopped the loop without
+           leaving a question pending — recover instead of swallowing Enter. */
+        if (!this.running) {
+          this._lastUsername = this.username || this._lastUsername;
+          this.token = null;
+          this.guest = false;
+          this.github.setCredentials(null, null);
+          this._reauth = true;
+        }
+        if (!this.busy) this.loop();
+        return;
+      }
       const value = this.inputEl.value;
       const { resolve, opts, question } = this._pending;
       this._pending = null;
@@ -553,25 +622,47 @@ class QCli {
   }
 
 
+  signInMessage() {
+    return `Signed in as ${C.bold}${this.username}${C.reset}` +
+      (this.guest ? '  (guest — public read-only access)' : '');
+  }
+
+
+  announceSignIn() {
+    this.ok(this.signInMessage());
+    if (this.guest) this.info('Guest mode: public repos and files only; writes are disabled (GitHub allows 60 requests/hour).');
+  }
+
+
   async authenticate() {
-    if (this.username && this.token) return this.validateToken();
-    const u = await this.ask(paint(C.cyan, 'GitHub username: '));
+    if (this.username && (this.token || this.guest)) return this.validateToken();
+    const u = await this.ask(paint(C.cyan, 'GitHub username: '),
+      this._lastUsername ? { value: this._lastUsername } : {});
     if (u === null) throw new Error('aborted');
     this.username = String(u).trim();
     if (!this.username) throw new Error('A username is required.');
-    const t = await this.askHidden(paint(C.cyan, 'Personal Access Token: '));
+    const t = await this.askHidden(paint(C.cyan, 'Personal Access Token (Enter for guest read-only): '));
     if (t === null) throw new Error('aborted');
-    this.token = String(t).trim();
-    if (!this.token) throw new Error('A token is required.');
+    this.token = String(t).trim() || null;
+    this.guest = !this.token;
     await this.validateToken();
   }
 
 
   async validateToken() {
-    this.github.setCredentials(this.username, this.token);
-    const me = await this.github.request('GET', '/user');
-    this.username = me.login;
-    this.user = me;
+    this.github.setCredentials(this.username, this.guest ? null : this.token);
+    const endpoint = this.guest ? `/users/${encodeURIComponent(this.username)}` : '/user';
+    try {
+      const me = await this.github.request('GET', endpoint);
+      this.username = me.login;
+      this.user = me;
+    } catch (e) {
+      /* Guest verification is cosmetic (we already know the login), so a
+         403 rate limit or an offline browser must not prevent the loop starting. */
+      if (!this.guest) throw e;
+      this.user = { login: this.username };
+      this.warn(`Could not verify guest account (${(e && e.message) || e}); continuing as ${this.username}.`);
+    }
     this.updateStatus();
   }
 
@@ -610,6 +701,10 @@ class QCli {
   /* Ctrl+X aborts whatever is happening: an open question, queued commands and
      the currently running command (which checks abortIfRequested()). */
   cancelOperation() {
+    /* If ^X was only used to dismiss a pager, keep it quiet — closePager()
+       already removed the breadcrumb and returned focus to the command line. */
+    const hadPager = !!this._pager;
+    const hadPending = !!this._pending;
     this._abortRequested = true;
     this.closePager();
     let cleared = 0;
@@ -625,6 +720,7 @@ class QCli {
       this.restorePrompt();
       resolve(null);
     }
+    if (hadPager && !cleared && !hadPending) return;
     this.out(paint(C.yellow, `  ^X cancelled${cleared ? ` — cleared ${cleared} queued command(s)` : ''}`));
     this.scroll(true);
   }
@@ -643,8 +739,30 @@ class QCli {
 
   async loop() {
     if (!this.running) {
-      this.out(paint(C.gray, 'Goodbye. Token discarded from memory.'));
-      return;
+      if (!this._reauth) {
+        this.out(paint(C.gray, 'Goodbye. Token discarded from memory.'));
+        return;
+      }
+      this._reauth = false;
+      /* Stay in this loop: prompt again until sign-in succeeds or Ctrl+X aborts. */
+      while (!this.running) {
+        try {
+          await this.authenticate();
+          this.announceSignIn();
+          this.running = true;
+          this.updateStatus();
+        } catch (e) {
+          const msg = (e && e.message) || String(e);
+          if (/abort/i.test(msg)) {
+            this.out(paint(C.gray, 'Goodbye.'));
+            return;
+          }
+          this.err(`Sign-in failed: ${msg}`);
+          this._lastUsername = this.username || this._lastUsername;
+          this.token = null;   // force a fresh prompt instead of retrying a bad token
+          this.github.setCredentials(this.username, null);
+        }
+      }
     }
 
     let line;
@@ -674,6 +792,9 @@ class QCli {
       this.err(e instanceof ApiError ? e.message : (e && e.message) || String(e));
     }
 
+    /* `select` / `cd` / `branch` change the path — redraw the live prompt so it
+       shows the current repo instead of the one from before the command. */
+    this.restorePrompt();
     this.updateStatus();
     await new Promise((r) => setTimeout(r, 0));
     return this.loop();
@@ -966,10 +1087,12 @@ class QCli {
   updateStatus() {
     if (!this.statusEl) return;
     const user = this.username || '—';
+    const mode = this.guest ? 'guest (read-only)' : 'token';
     const repo = this.repo ? `${this.repo.owner}/${this.repo.name}` : '—';
     const branch = this.repo ? this.repo.branch : '—';
     this.statusEl.innerHTML =
       `<span class="st-key">user</span><span class="st-val">${escapeHtml(user)}</span>` +
+      `<span class="st-key">mode</span><span class="st-val">${mode}</span>` +
       `<span class="st-key">repo</span><span class="st-val">${escapeHtml(repo)}</span>` +
       `<span class="st-key">branch</span><span class="st-val">${escapeHtml(branch)}</span>` +
       `<span class="st-key">path</span><span class="st-val st-path" title="Click to copy">${escapeHtml(this.github.pwd())}</span>` +
@@ -1191,8 +1314,11 @@ class QCli {
           <button class="editor-x" title="Close (Ctrl+X)">×</button>
         </div>
         <div class="editor-body">
-          <div class="editor-gutter" aria-hidden="true">1</div>
-          <textarea class="editor-area" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
+          <div class="editor-gutter" aria-hidden="true"></div>
+          <div class="editor-input-wrap">
+            <textarea class="editor-area" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="soft"></textarea>
+            <div class="editor-measure" aria-hidden="true"></div>
+          </div>
         </div>
         <div class="editor-save" hidden>
           <input class="editor-filename" type="text" placeholder="File name (e.g. notes.txt)" aria-label="File name" hidden>
@@ -1210,6 +1336,7 @@ class QCli {
 
     this.editorArea    = this.editorEl.querySelector('.editor-area');
     this.editorGutter  = this.editorEl.querySelector('.editor-gutter');
+    this.editorMeasure = this.editorEl.querySelector('.editor-measure');
     this.editorFileEl  = this.editorEl.querySelector('.editor-file');
     this.editorSaveBar = this.editorEl.querySelector('.editor-save');
     this.editorNameEl  = this.editorEl.querySelector('.editor-filename');
@@ -1217,7 +1344,10 @@ class QCli {
     this.editorPosEl   = this.editorEl.querySelector('.editor-pos');
     this.editorHintEl  = this.editorEl.querySelector('.editor-hint');
 
-    this.editorArea.addEventListener('input', () => this.editorRefresh());
+    this.editorArea.addEventListener('input', () => {
+      this.editorRefresh();
+      this.editorFollowCaret();
+    });
     this.editorArea.addEventListener('scroll', () => {
       this.editorGutter.scrollTop = this.editorArea.scrollTop;
     });
@@ -1238,16 +1368,44 @@ class QCli {
   }
 
 
+  editorLineHeight() {
+    return parseFloat(getComputedStyle(this.editorArea).lineHeight) || 18;
+  }
+
+
+  /* Hidden mirror of the textarea: measure how many screen rows each logical
+     line occupies after soft wrapping, so gutter numbers stay aligned. */
+  editorWrappedRows(logical) {
+    const m = this.editorMeasure;
+    if (!m) return logical.map(() => 1);
+    const lh = this.editorLineHeight();
+    m.innerHTML = logical.map((l) => `<div>${escapeHtml(l) || '&nbsp;'}</div>`).join('');
+    return Array.from(m.children, (el) =>
+      Math.max(1, Math.round(el.getBoundingClientRect().height / lh)));
+  }
+
+
   editorRefresh() {
     if (!this.editorArea) return;
-    const lines = this.editorArea.value.split('\n').length;
-    this.editorGutter.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+    const logical = this.editorArea.value.split('\n');
+    const rows = this.editorWrappedRows(logical);
+    const lh = this.editorLineHeight();
+    this.editorGutter.innerHTML = logical.map((_, i) =>
+      `<span class="gutter-num" style="height:${rows[i] * lh}px">${i + 1}</span>`).join('');
     this.editorGutter.scrollTop = this.editorArea.scrollTop;
     const pos = this.editorArea.selectionStart;
-    const before = this.editorArea.value.slice(0, pos);
-    this.editorPosEl.textContent =
-      `Ln ${before.split('\n').length}, Col ${pos - before.lastIndexOf('\n')}`;
+    const before = this.editorArea.value.slice(0, pos).split('\n');
+    this.editorPosEl.textContent = `Ln ${before.length}, Col ${before[before.length - 1].length + 1}`;
     this._editorDiscardArmed = false;
+  }
+
+
+  /* Typing past the last visible row must keep the caret in view. */
+  editorFollowCaret() {
+    const a = this.editorArea;
+    if (!a) return;
+    if (a.selectionStart === a.value.length) a.scrollTop = a.scrollHeight;
+    this.editorGutter.scrollTop = a.scrollTop;
   }
 
 
@@ -1562,7 +1720,7 @@ class QCli {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    this.ok(`Downloaded ${path} → ${name} (${bytes.length} bytes)`);
+    this.ok(`Downloaded ${path} → ${name} (${this.fmtSize(bytes.length)})`);
   }
 
 
@@ -1599,9 +1757,16 @@ class QCli {
     if (e.key === 'Tab') {
       e.preventDefault();
       const a = this.editorArea, s = a.selectionStart, end = a.selectionEnd;
+      const top = a.scrollTop;
       a.value = a.value.slice(0, s) + '  ' + a.value.slice(end);
       a.selectionStart = a.selectionEnd = s + 2;
+      a.scrollTop = top;
       this.editorRefresh();
+      this.editorFollowCaret();
+    }
+    if (e.key === 'Enter') {
+      /* Let the browser insert the newline first, then pin the view to the end. */
+      setTimeout(() => this.editorFollowCaret(), 0);
     }
   }
 
@@ -1725,8 +1890,8 @@ class QCli {
     foot.className = 'pager-foot';
     const atEnd = to >= st.total;
     const msg = atEnd
-      ? `  ── end of ${st.label} (${st.total}) ──  [q] quit`
-      : `  [space] next ${st.size}  ·  [q] quit  ·  ${to}/${st.total} ${st.label}`;
+      ? `  ── end of ${st.label} (${st.total}) ──  [q / ^X] back to command`
+      : `  [space] next ${st.size}  ·  [q / ^X] back to command  ·  ${to}/${st.total} ${st.label}`;
     foot.innerHTML = ansiToHtml(paint(C.cyan, msg));
     (this._groupEl || this.outEl).appendChild(foot);
     st.footer = foot;
@@ -1748,7 +1913,7 @@ class QCli {
         if (!st._shownEnd) {
           st._shownEnd = true;
           if (st.footer) st.footer.innerHTML = ansiToHtml(
-            paint(C.yellow, `  ── end of ${st.total} ${st.label} ──  [q] quit`));
+            paint(C.yellow, `  ── end of ${st.total} ${st.label} ──  [q / ^X] back to command`));
         }
         return;
       }
@@ -1771,6 +1936,10 @@ class QCli {
     this._pager = null;
     this._pagerHandler = null;
     if (this.promptEl && !this.busy) this.promptEl.innerHTML = ansiToHtml(this.promptStr());
+    /* Closing the pager (q / ^X / a new command) drops its breadcrumb and
+       hands focus back to the command line — unless a modal owns focus. */
+    const modalOpen = (this.prefEl && !this.prefEl.hidden) || (this.editorEl && !this.editorEl.hidden);
+    if (!modalOpen && this.inputEl) this.inputEl.focus();
   }
 
 
@@ -1804,7 +1973,7 @@ class QCli {
         const lines = ch.content === '' ? 0 : ch.content.split('\n').length - (ch.content.endsWith('\n') ? 1 : 0);
         this.out(paint(C.green, `  + ${ch.path}`) + paint(C.gray, `  (${lines} line${lines === 1 ? '' : 's'})`));
       } else {
-        const size = ch.size != null ? `${ch.size} bytes` : 'binary';
+        const size = ch.size != null ? this.fmtSize(ch.size) : 'binary';
         this.out(paint(C.green, `  + ${ch.path}`) + paint(C.gray, `  (${size})`));
       }
     }
@@ -1891,6 +2060,17 @@ class QCli {
   }
 
 
+  guestCanRun(name, args) {
+    if (GUEST_READ_COMMANDS.has(name)) return true;
+    if (name === 'repo') {
+      const sub = String(args[0] || '').toLowerCase();
+      if (GUEST_READ_REPO_SUBS.has(sub)) return true;
+      if (sub === 'topics' && !args.slice(1).length) return true;
+    }
+    return false;
+  }
+
+
   async executeSingle(text) {
     const t0 = performance.now();
     this.busyStart(text.trim());
@@ -1906,6 +2086,11 @@ class QCli {
         else expanded.push(t);
       }
       argv = expanded;
+      if (this.guest && !this.guestCanRun(argv[0], argv.slice(1))) {
+        ok = false;
+        this.err(`Guest mode is read-only — "${argv[0]}" needs a token. Run "exit" to sign in with one.`);
+        return false;
+      }
       /* -f / --fresh / --refresh forces no-store for this command's API calls
          (and also refreshes the local directory listing cache in ls/info). */
       this.github.forceFresh = argv.slice(1).some((a) => /^(-f|--fresh|--refresh)$/i.test(a));
@@ -1944,8 +2129,9 @@ class QCli {
     add('clear',   'clear',                    'Clear the terminal screen',            this.cmdClear);
     add('cls',     'cls',                      'Alias for clear',                      this.cmdClear);
     add('history', 'history',                  'Show command history',                 this.cmdHistory);
-    add('exit',    'exit | quit',              'Log out and exit',                     this.cmdExit);
-    add('quit',    'exit | quit',              'Log out and exit',                     this.cmdExit);
+    add('exit',    'exit | quit | logout',     'Log out and prompt for credentials again', this.cmdExit);
+    add('quit',    'exit | quit | logout',     'Alias for exit',                       this.cmdExit);
+    add('logout',  'exit | quit | logout',     'Alias for exit',                       this.cmdExit);
     add('commit',  'commit -m "msg"',          'Queue a message for the next mutation', this.cmdCommit);
     add('sleep',   'sleep <sec>',              'Wait N seconds (shows the await animation)', this.cmdSleep);
     add('demo',    'demo',                     'Run a short sequential demo',          this.cmdDemo);
@@ -1953,8 +2139,8 @@ class QCli {
     add('pref',    'pref ...',                 'Alias for prefs',                      this.cmdPrefs);
     add('settings','settings',                 'Alias for prefs',                      this.cmdPrefs);
 
-    add('repos',   'repos [--all]',            'List your repositories',               this.cmdRepos);
-    add('select',  'select <repo|owner/repo>', 'Set the active repository',            this.cmdSelect);
+    add('repos',   'repos [--all]',            'List repos with 1, 2, ... refs',       this.cmdRepos);
+    add('select',  'select <repo|owner/repo|#>','Set the active repository',           this.cmdSelect);
     add('branch',  'branch [name]',            'Show or switch the active branch',     this.cmdBranch);
     add('open',    'open [path]',              'Open the repo/path on GitHub in a tab', this.cmdOpen);
     add('repo',    'repo <sub> [args]',        'info|create|delete|fork|star|unstar|watch|unwatch|branches|tags|releases|collaborators|issues|pulls|commits|contributors|languages|topics|license', this.cmdRepo);
@@ -1975,9 +2161,9 @@ class QCli {
     add('mkdir',   'mkdir <name>',             'Create a folder (via .gitkeep)',       this.cmdMkdir);
     add('touch',   'touch <file>',             'Create an empty file',                 this.cmdTouch);
     add('cat',     'cat <file>',               'Print file contents',                  this.cmdCat);
-    add('show',    'show <file|index>',        'Preview a file inline (text, image, PDF, media)', this.cmdShow);
-    add('view',    'show <file|index>',        'Alias for show',                       this.cmdShow);
-    add('preview', 'show <file|index>',        'Alias for show',                       this.cmdShow);
+    add('show',    'show <file|index|fN>',     'Preview a file inline (text, image, PDF, media)', this.cmdShow);
+    add('view',    'show <file|index|fN>',     'Alias for show',                       this.cmdShow);
+    add('preview', 'show <file|index|fN>',     'Alias for show',                       this.cmdShow);
     add('info',    'info <file|index>',        'Show file metadata (no content fetch)', this.cmdInfo);
     add('echo',    'echo "text" > file',       'Write text to a file (>> to append)',  this.cmdEcho);
     add('put',      'put [-r] [-j N] [path]',  'Upload local file(s)/folder (-r), N at a time', this.cmdPut);
@@ -1994,7 +2180,7 @@ class QCli {
     add('head',    'head [-n N] <file>',       'First N lines of a file (default 10)', this.cmdHead);
     add('tail',    'tail [-n N] <file>',       'Last N lines of a file (default 10)',  this.cmdTail);
     add('wc',      'wc <file>',                'Line / word / character count',        this.cmdWc);
-    add('find',    'find <pattern>',           'Search filenames via tree API',        this.cmdFind);
+    add('find',    'find <pattern>',           'Search filenames; results get f1, f2, ... refs', this.cmdFind);
     add('grep',    'grep [-n] [-i] <pat> <file>', 'Search inside file contents',       this.cmdGrep);
     add('stat',    'stat <path>',              'File metadata (sha, size, url)',       this.cmdStat);
     add('chmod',   'chmod <path>',             'Show permissions (info only)',         this.cmdChmod);
@@ -2091,6 +2277,7 @@ class QCli {
     if (this.outEl) this.outEl.innerHTML = '';
     for (const url of this._objectUrls || []) URL.revokeObjectURL(url);
     this._objectUrls = [];
+    if (this._codeViews) this._codeViews.clear();
     this._groupEl = null;
   }
 
@@ -2101,7 +2288,21 @@ class QCli {
   }
 
 
-  async cmdExit() { this.running = false; this.token = null; this.github.setCredentials(this.username, null); this._queue = []; }
+  async cmdExit() {
+    this._lastUsername = this.username || this._lastUsername;
+    this.running = false;
+    this._reauth = true;
+    this.token = null;
+    this.username = null;
+    this.user = null;
+    this.guest = false;
+    this.repo = null; this.cwd = [];
+    this.github.setCredentials(null, null);
+    this._queue = [];
+    this.clearUrlHash();              // drop a token synced into the address bar
+    this.out(paint(C.gray, 'Logged out. Token discarded from memory.'));
+    this.updateStatus();
+  }
 
 
   async cmdCommit(args) {
@@ -2185,11 +2386,16 @@ class QCli {
 
   async cmdRepos(args) {
     const all = args.includes('--all') || args.includes('-a');
-    const ep = all
-      ? '/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&sort=updated'
-      : '/user/repos?sort=updated';
+    const ep = this.guest
+      ? `/users/${encodeURIComponent(this.username || '')}/repos?${all ? 'type=all&' : ''}sort=updated`
+      : all
+        ? '/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&sort=updated'
+        : '/user/repos?sort=updated';
     const data = await this.github.paginate(ep, { max: 10 });
-    this.table(data, [
+    this._lastRepos = data.map((r) => r.full_name).filter(Boolean);
+    const rows = data.map((r, i) => ({ ...r, _ref: i + 1 }));
+    this.table(rows, [
+      { key: '_ref', label: '#' },
       { key: 'full_name', label: 'REPOSITORY', fmt: (r) => (r.private ? '🔒 ' : '   ') + r.full_name },
       { key: 'language', label: 'LANG', fmt: (r) => r.language || '-' },
       { key: 'stargazers_count', label: '★' },
@@ -2197,12 +2403,18 @@ class QCli {
       { key: 'default_branch', label: 'BRANCH' },
       { key: 'updated_at', label: 'UPDATED', fmt: (r) => (r.updated_at || '').slice(0, 10) }
     ]);
+    if (this._lastRepos.length) this.info(`Use select 1–${this._lastRepos.length} to open a repo by number.`);
   }
 
 
   async cmdSelect(args) {
-    const name = args[0];
-    if (!name) return this.err('Usage: select <repo|owner/repo>');
+    let name = args[0];
+    if (!name) return this.err('Usage: select <repo|owner/repo|#>');
+    if (/^\d+$/.test(name)) {
+      const ref = this._lastRepos[Number(name) - 1];
+      if (!ref) return this.err(`No repository #${name} — run repos first (${this._lastRepos.length} listed).`);
+      name = ref;
+    }
     const full = name.includes('/') ? name : `${this.username}/${name}`;
     const r = await this.github.request('GET', `/repos/${full}`);
     this.repo = { owner: r.owner.login, name: r.name, branch: r.default_branch, data: r };
@@ -2624,12 +2836,18 @@ class QCli {
   async resolvePath(spec) {
     const s = String(spec == null ? '' : spec);
     if (!s) return '';
+    /* Try a real name/path first, so a file actually named `f3` still wins. */
     try {
       const found = await this.resolveEntry(s);
       return found.entry.path || [...found.dir.split('/').filter(Boolean), found.entry.name].join('/');
-    } catch (_) {
-      return this.github.resolve(s).join('/');
+    } catch (_) { /* not a real name/path */ }
+    /* `f<N>` refers to entry N from the last `find` listing. */
+    const ref = /^f(\d+)$/i.exec(s);
+    if (ref && this._lastFind.hits.length) {
+      const hit = this._lastFind.hits[Number(ref[1]) - 1];
+      if (hit) return hit.path;
     }
+    return this.github.resolve(s).join('/');
   }
 
 
@@ -2744,6 +2962,269 @@ class QCli {
   }
 
 
+  /* ── syntax highlighting for text files opened with `show` ──
+     A compact lexer keeps this dependency-free (works from file:// too).
+     Every token is escaped before it becomes markup. */
+  codeLanguage(name) {
+    const base = String(name || '').toLowerCase().split('/').pop();
+    if (!base.includes('.')) {
+      const special = { dockerfile:'dockerfile', makefile:'make', make:'make',
+        gemfile:'ruby', rakefile:'ruby', readme:'markdown', license:'text' };
+      return special[base] || 'text';
+    }
+    const ext = base.split('.').pop();
+    const map = {
+      md:'markdown', markdown:'markdown', mdx:'markdown',
+      js:'javascript', jsx:'javascript', mjs:'javascript', cjs:'javascript',
+      ts:'javascript', tsx:'javascript',
+      json:'json', jsonc:'json', json5:'json', ipynb:'json', lock:'json',
+      html:'html', htm:'html', xhtml:'html', xml:'html', xsd:'html',
+      svg:'html', vue:'html', svelte:'html',
+      css:'css', scss:'css', sass:'css', less:'css',
+      py:'python', pyw:'python',
+      java:'java', kt:'java', kts:'java', cs:'java', scala:'java',
+      c:'c', h:'c', cc:'c', cpp:'c', cxx:'c', hpp:'c', hh:'c',
+      go:'c', rs:'c', swift:'c', dart:'c', groovy:'c', gradle:'c',
+      php:'php', rb:'ruby', pl:'perl', pm:'perl',
+      sh:'shell', bash:'shell', zsh:'shell', fish:'shell', ps1:'shell',
+      bat:'shell', cmd:'shell', make:'make', mk:'make',
+      yml:'yaml', yaml:'yaml', toml:'yaml', ini:'yaml', cfg:'yaml', conf:'yaml',
+      properties:'yaml', env:'yaml', editorconfig:'yaml', gitignore:'yaml',
+      gitattributes:'yaml', tf:'yaml', hcl:'yaml',
+      sql:'sql', diff:'diff', patch:'diff',
+      graphql:'graphql', gql:'graphql',
+      ex:'elixir', exs:'elixir', erl:'erlang', hrl:'erlang', hs:'haskell',
+      r:'r', tex:'text', rst:'text', adoc:'text', log:'text',
+      txt:'text', text:'text', csv:'text', tsv:'text'
+    };
+    return map[ext] || 'text';
+  }
+
+
+  codeRules(lang) {
+    const str  = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
+    const tpl  = String.raw`\`(?:\\.|[^\`\\])*\``;
+    const num  = String.raw`\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`;
+    const kw   = (w) => String.raw`\b(?:${w.join('|')})\b`;
+    const rules = [];
+    const add = (src, cls) => rules.push({ src, cls });
+    const tail = () => {
+      add(num, 'tok-num');
+      add(kw(['true','false','null','undefined','None','True','False','nil']), 'tok-lit');
+      add(String.raw`[A-Za-z_$][\w$]*(?=\s*\()`, 'tok-fn');
+      add(String.raw`\.[A-Za-z_$][\w$]*`, 'tok-prop');
+      add(String.raw`[{}()\[\];,.:+\-*/%=<>!&|^~?@]+`, 'tok-punc');
+    };
+
+    switch (lang) {
+      case 'javascript':
+        add(String.raw`/\*[\s\S]*?\*/|//[^\n]*`, 'tok-com');
+        add(tpl, 'tok-str'); add(str, 'tok-str');
+        add(kw(['const','let','var','function','return','if','else','for','while','do',
+          'switch','case','break','continue','class','extends','new','super','this',
+          'typeof','instanceof','in','of','try','catch','finally','throw','async',
+          'await','yield','import','export','from','default','as','static','get',
+          'set','interface','type','enum','implements','public','private','protected',
+          'readonly','declare','namespace','delete','void','debugger']), 'tok-kw');
+        tail(); break;
+
+      case 'python':
+        add(String.raw`#(?!\!)[^\n]*`, 'tok-com');
+        add(String.raw`(?:"""[\s\S]*?"""|'''[\s\S]*?''')`, 'tok-str');
+        add(str, 'tok-str');
+        add(kw(['def','class','return','if','elif','else','for','while','in','not',
+          'and','or','is','import','from','as','with','try','except','finally','raise',
+          'yield','lambda','pass','break','continue','global','nonlocal','assert',
+          'async','await','del','self','match','case']), 'tok-kw');
+        tail(); break;
+
+      case 'shell':
+        add(String.raw`#[^\n]*`, 'tok-com');
+        add(str, 'tok-str');
+        add(String.raw`\$\{?\w+\}?`, 'tok-var');
+        add(kw(['if','then','else','elif','fi','for','do','done','while','case',
+          'esac','function','in','return','export','local','source','set','unset',
+          'alias','exit','trap','read','printf','echo']), 'tok-kw');
+        tail(); break;
+
+      case 'json':
+        add(String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`, 'tok-prop');
+        add(str, 'tok-str'); add(num, 'tok-num');
+        add(kw(['true','false','null']), 'tok-lit');
+        add(String.raw`[{}()\[\];,:]+`, 'tok-punc'); break;
+
+      case 'html':
+        add(String.raw`<!--[\s\S]*?-->|<!DOCTYPE[^>]*>`, 'tok-com');
+        add(String.raw`</?[A-Za-z][\w:.-]*`, 'tok-tag');
+        add(String.raw`[A-Za-z_:][\w:.-]*(?=\s*=)`, 'tok-attr');
+        add(String.raw`/?>`, 'tok-tag');
+        add(str, 'tok-str'); tail(); break;
+
+      case 'css':
+        add(String.raw`/\*[\s\S]*?\*/`, 'tok-com');
+        add(str, 'tok-str');
+        add(String.raw`#[0-9a-fA-F]{3,8}\b`, 'tok-num');
+        add(String.raw`@[\w-]+`, 'tok-kw');
+        add(String.raw`[-a-zA-Z]+(?=\s*:)`, 'tok-prop');
+        add(num, 'tok-num');
+        add(String.raw`[{}();:,]+`, 'tok-punc'); break;
+
+      case 'yaml':
+        add(String.raw`#[^\n]*`, 'tok-com');
+        add(str, 'tok-str');
+        add(String.raw`^[ \t]*(?:-[ \t]*)?[\w./-]+(?=\s*:)`, 'tok-prop');
+        add(kw(['true','false','null','yes','no','on','off']), 'tok-lit');
+        add(num, 'tok-num');
+        add(String.raw`[\[\]{},:|-]+`, 'tok-punc'); break;
+
+      case 'sql':
+        add(String.raw`/\*[\s\S]*?\*/|--[^\n]*`, 'tok-com');
+        add(String.raw`'(?:''|\\.|[^'\\])*'`, 'tok-str');
+        add(kw(['select','from','where','insert','into','values','update','set','delete',
+          'create','table','drop','alter','join','left','right','inner','outer','on',
+          'and','or','not','null','is','in','like','order','by','group','having',
+          'limit','offset','as','distinct','count','sum','avg','min','max','primary',
+          'key','foreign','references','default','union','all','case','when','then',
+          'else','end','with','begin','commit','rollback']), 'tok-kw');
+        tail(); break;
+
+      case 'markdown':
+        add(String.raw`^#{1,6}[^\n]*`, 'tok-kw');
+        add(String.raw`\*\*[^*]+\*\*|__[^_]+__`, 'tok-strong');
+        add(String.raw`\[[^\]]+\]\([^)]+\)`, 'tok-fn');
+        add('(?:```[^\\n]*|`[^\\n`]*`)', 'tok-str');
+        add(String.raw`^[ \t]*>[^\n]*`, 'tok-com'); break;
+
+      case 'diff':
+        add(String.raw`^\+[^\n]*`, 'tok-add');
+        add(String.raw`^-[^\n]*`, 'tok-del');
+        add(String.raw`^@@[^\n]*`, 'tok-kw'); break;
+
+      case 'graphql':
+        add(String.raw`#[^\n]*`, 'tok-com'); add(str, 'tok-str');
+        add(kw(['query','mutation','subscription','fragment','on','type','input',
+          'interface','enum','union','scalar','schema','directive']), 'tok-kw');
+        tail(); break;
+
+      case 'elixir': case 'ruby': case 'perl': case 'php':
+        add(String.raw`#(?!\{)[^\n]*|//[^\n]*`, 'tok-com');
+        add(str, 'tok-str');
+        add(kw(['def','defp','do','end','if','else','elsif','unless','case','when',
+          'module','class','require','import','use','fn','return','each','map','puts',
+          'echo','function','public','private','protected','new','self','nil','true',
+          'false','foreach','include','namespace']), 'tok-kw');
+        tail(); break;
+
+      case 'make': case 'dockerfile':
+        add(String.raw`#[^\n]*`, 'tok-com');
+        add(str, 'tok-str');
+        add(String.raw`\$\{?\w+\}?`, 'tok-var');
+        add(kw(['FROM','RUN','CMD','ENTRYPOINT','WORKDIR','COPY','ADD','ENV','ARG',
+          'EXPOSE','VOLUME','USER','LABEL','if','endif','ifeq','else','include',
+          'export','define','endef']), 'tok-kw');
+        tail(); break;
+
+      case 'c': case 'java': default:
+        add(String.raw`/\*[\s\S]*?\*/|//[^\n]*`, 'tok-com');
+        add(String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, 'tok-str');
+        add(kw(['const','let','var','static','final','public','private','protected',
+          'class','interface','struct','enum','namespace','template','typename','new',
+          'delete','return','if','else','for','while','do','switch','case','break',
+          'continue','try','catch','finally','throw','throws','import','package','using',
+          'void','int','long','short','char','float','double','bool','boolean','string',
+          'func','defer','go','range','map','chan','fn','mut','impl','trait','let',
+          'async','await','function','this','super','extends','export','default',
+          'typeof','instanceof','in','of','yield']), 'tok-kw');
+        tail(); break;
+    }
+    return rules;
+  }
+
+
+  /* Returns highlighted HTML for each line (without line numbers). */
+  highlightCode(text, lang) {
+    const rules = this.codeRules(lang);
+    const source = rules.map((r, i) => `(?<g${i}>${r.src})`).join('|');
+    const re = new RegExp(source, 'my');
+    const searchRe = new RegExp(source, 'gm');
+    const lines = [''];
+    const push = (s, cls) => {
+      if (!s) return;
+      const parts = String(s).split('\n');
+      for (let i = 0; i < parts.length; i++) {
+        if (i) lines.push('');
+        const part = parts[i];
+        if (part) lines[lines.length - 1] +=
+          cls ? `<span class="${cls}">${escapeHtml(part)}</span>` : escapeHtml(part);
+      }
+    };
+
+    let pos = 0;
+    while (pos < text.length) {
+      re.lastIndex = pos;
+      const m = re.exec(text);
+      if (!m) {
+        /* Nothing starts exactly here (whitespace, plain identifiers, …):
+           skip to the next token rather than abandoning the whole remainder. */
+        searchRe.lastIndex = pos + 1;
+        const next = searchRe.exec(text);
+        const end = next && next.index > pos ? next.index : text.length;
+        push(text.slice(pos, end));
+        pos = end;
+        continue;
+      }
+      if (m.index > pos) push(text.slice(pos, m.index));
+      let idx = -1;
+      for (let i = 0; i < rules.length; i++) {
+        if (m[i + 1] !== undefined) { idx = i; break; }
+      }
+      push(m[0], idx < 0 ? null : rules[idx].cls);
+      pos = re.lastIndex > pos ? re.lastIndex : pos + 1;
+    }
+    if (text.endsWith('\n') && lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+
+
+  showCode(text, name, meta) {
+    const lang = this.codeLanguage(name);
+    const lines = this.highlightCode(text, lang);
+    const width = String(lines.length).length;
+    const body = lines.map((html, i) =>
+      `<div class="code-line"><span class="code-ln">${String(i + 1).padStart(width, ' ')}</span>` +
+      `<span class="code-src">${html || ' '}</span></div>`).join('');
+    const id = `code-${++this._codeViewSeq}`;
+    this._codeViews.set(id, text);
+    const label = lang === 'text' ? 'text' : lang;
+    const copy = `<button class="code-copy" type="button" data-code-id="${id}" ` +
+      `title="Copy file contents">Copy</button>`;
+    const cap = this.showCaption(name, { ...meta, size: null }, label, copy);
+    this.outHtml(`<div class="term-view term-view--code" data-code-id="${id}">${cap}` +
+      `<div class="code-view">${body}</div></div>`);
+  }
+
+
+  async copyCodeText(text, btn) {
+    let done = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(text); done = true; } catch (_) {}
+    }
+    if (!done) {
+      /* file:// pages often block the Clipboard API — use the legacy path. */
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      try { done = document.execCommand('copy'); } catch (_) {}
+      ta.remove();
+    }
+    if (!done) return this.err('Could not copy — clipboard access denied.');
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = old; }, 1200);
+  }
+
+
   async showBase64(meta) {
     /* Contents API omits (or empties) `content` above ~1 MB — fetch the raw blob. */
     if (typeof meta.content === 'string' && meta.content.length) {
@@ -2798,18 +3279,18 @@ class QCli {
   }
 
 
-  showCaption(name, meta, mime) {
+  showCaption(name, meta, mime, extra = '') {
     const bits = [escapeHtml(name)];
     if (meta.size != null) bits.push(this.fmtSize(meta.size));
     if (mime) bits.push(escapeHtml(mime));
-    return `<div class="term-view-cap">${bits.join(' · ')}</div>`;
+    return `<div class="term-view-cap">${bits.join(' · ')}${extra}</div>`;
   }
 
 
   async cmdShow(args) {
     this.github.needRepo();
     const spec = (args || []).filter((a) => !a.startsWith('-')).join(' ').trim();
-    if (!spec) return this.err('Usage: show <file|index>   e.g. show README.md, show 2');
+    if (!spec) return this.err('Usage: show <file|index|fN>   e.g. show README.md, show 2, show f3');
 
     const path = await this.resolvePath(spec);
     const meta = await this.github.getContent(path);
@@ -2830,8 +3311,7 @@ class QCli {
     if (!sniffed && (type === 'text' || type === 'auto')) {
       const text = window.base64ToUtf8(b64);
       if (text.indexOf('\0') === -1 || type === 'text') {
-        this.outRaw(text, { newline: false });
-        if (!text.endsWith('\n')) this.out('', { newline: true });
+        this.showCode(text, name, meta);
         this.scroll(true);
         return;
       }
@@ -3049,8 +3529,23 @@ class QCli {
       .filter((e) => (prefix ? e.path.startsWith(prefix + '/') : true))
       .filter((e) => re.test(e.path.split('/').pop()) || e.path.includes(pattern))
       .slice(0, 200);
+    this._lastFind = { pattern, hits };
     if (!hits.length) return this.info('(no matches)');
-    for (const h of hits) this.out(h.type === 'tree' ? paint(C.blue, './' + h.path + '/') : './' + h.path);
+    const width = String(hits.length).length + 1;
+    const fmtHit = (h, i) => {
+      const ref = paint(C.yellow, `f${i + 1}`.padEnd(width));
+      const path = h.type === 'tree' ? paint(C.blue, './' + h.path + '/') : './' + h.path;
+      return `${ref} ${path}`;
+    };
+    this.info(hits.length === 1
+      ? '1 match. Use f1 as a path, e.g. show f1.'
+      : `${hits.length} matches — showing 10 at a time. Use f1–f${hits.length} as a path, e.g. show f3.`);
+    this.showPager({
+      total: hits.length, size: 10, label: 'matches',
+      render: (from, to) => {
+        for (let i = from; i < to; i++) this.out(fmtHit(hits[i], i));
+      }
+    });
   }
 
 
@@ -3566,8 +4061,8 @@ class QCli {
     this.table(rows, [
       { label: 'RESOURCE', key: 'resource' },
       { label: 'LIMIT', key: 'limit' },
-      { label: 'REMAINING', key: 'remaining' },
       { label: 'USED', key: 'used' },
+      { label: 'REMAINING', key: 'remaining' },
       { label: 'RESET IN', key: 'resetIn' }
     ], { highlight: (r) => r.resource === 'core' });
     const core = resources.core;
