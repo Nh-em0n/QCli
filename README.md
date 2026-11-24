@@ -1,4 +1,6 @@
-# QCli (Browser Terminal) — User Guide
+# QCli
+
+[QCli](#) Browser Terminal
 
 QCli is a browser-based terminal that talks to the GitHub REST API v3
 (with a GraphQL v4 passthrough). It gives you a bash-like virtual filesystem
