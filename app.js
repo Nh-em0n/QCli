@@ -155,6 +155,8 @@ const DEFAULT_PREFS = {
 const GUEST_READ_COMMANDS = new Set([
   'help', '?', 'clear', 'cls', 'history', 'sleep', 'demo',
   'prefs', 'pref', 'settings', 'exit', 'quit', 'logout',
+  /* The editor is available offline too: guests edit local draft files. */
+  'editor', 'nano',
   'repos', 'select', 'branch', 'open', 'commits', 'log', 'pwd', 'cd',
   'autolog', 'autols', '..', '...', 'tree', 'ls', 'll', 'lt',
   'cat', 'show', 'view', 'preview', 'info', 'download', 'get',
@@ -168,6 +170,16 @@ const GUEST_READ_REPO_SUBS = new Set([
 ]);
 
 const PREFS_KEY = 'qcli.prefs.v1';
+const LOCAL_EDITOR_KEY = 'qcli.editor.files.v1';
+/* Scratch files used by the editor when there is no token or no selected repo. */
+function localEditorFiles() {
+  try {
+    const raw = localStorage.getItem(LOCAL_EDITOR_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+  } catch (_) { return {}; }
+}
+
 function loadPrefs() {
   try { const raw = localStorage.getItem(PREFS_KEY); return raw ? JSON.parse(raw) : {}; }
   catch (_) { return {}; }
@@ -1356,7 +1368,10 @@ class QCli {
     this.editorEl.querySelector('.editor-cancel').addEventListener('click', () => this.hideEditorSave());
     this.editorEl.querySelector('.editor-do').addEventListener('click', () => this.saveEditor());
     this.editorNameEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); this.editorMsgEl.focus(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (this.editorMsgEl.hidden) this.saveEditor(); else this.editorMsgEl.focus();
+      }
     });
     this.editorNameEl.addEventListener('input', () => {
       if (this._autoEditorMsg) this.editorMsgEl.value = `Create ${this.editorNameEl.value.trim() || 'new file'}`;
@@ -1725,19 +1740,26 @@ class QCli {
 
 
   async cmdEditor(args) {
-    this.github.needRepo();
     const raw = (args || []).join(' ').trim();
-    const path = raw ? await this.resolvePath(raw) : null;
+    /* Available in every state. A token + selected repo unlocks GitHub files;
+       otherwise the editor works on drafts kept locally in this browser. */
+    this._editorLocal = this.guest || !this.github.active;
+    this._editorLocalName = '';
+    let path = null;
     let initial = '';
-    if (path) {
+    if (raw && !this._editorLocal) {
+      path = await this.resolvePath(raw);
       const data = await this.github.getContent(path);
       if (Array.isArray(data)) return this.err(`editor: ${raw} is a directory`);
       if (data) initial = (await this.github.readFile(path)).content;
+    } else if (raw) {
+      this._editorLocalName = raw;
+      initial = String(localEditorFiles()[raw] || '');
     }
     this._editorPath = path;
     this._editorOriginal = initial;
     this._editorDiscardArmed = false;
-    this.editorFileEl.textContent = path || '(new file)';
+    this.editorFileEl.textContent = path || this._editorLocalName || '(new file)';
     this.editorArea.value = initial;
     this.editorSaveBar.hidden = true;
     this.editorEl.hidden = false;
@@ -1772,14 +1794,16 @@ class QCli {
 
 
   showEditorSave() {
-    this.editorNameEl.hidden = !!this._editorPath;
-    if (!this._editorPath) this.editorNameEl.value = '';
+    const local = this._editorLocal;
+    this.editorNameEl.hidden = !local && !!this._editorPath;
+    if (local || !this._editorPath) this.editorNameEl.value = this._editorLocalName || '';
+    this.editorMsgEl.hidden = local;
     this._autoEditorMsg = !this.pendingMessage;
     const target = this._editorPath || this.editorNameEl.value.trim();
     this.editorMsgEl.value = this.pendingMessage ||
       (this._editorPath ? `Update ${target}` : `Create ${target || 'new file'}`);
     this.editorSaveBar.hidden = false;
-    (this._editorPath ? this.editorMsgEl : this.editorNameEl).focus();
+    (local || !this._editorPath ? this.editorNameEl : this.editorMsgEl).focus();
   }
 
 
@@ -1791,18 +1815,33 @@ class QCli {
 
   async saveEditor() {
     if (this._editorSaving) return;
-    const isNew = !this._editorPath;
-    let path = this._editorPath;
-    if (!path) {
-      const name = this.editorNameEl.value.trim();
-      if (!name) { this.editorHint('Enter a filename to save.'); this.editorNameEl.focus(); return; }
-      path = this.github.resolve(name).join('/');
-    }
-    const content = this.editorArea.value;
-    const message = this.pendingMessage || this.editorMsgEl.value.trim() ||
-                    `${isNew ? 'Create' : 'Update'} ${path}`;
     this._editorSaving = true;
+    const content = this.editorArea.value;
     try {
+      if (this._editorLocal) {
+        const name = this.editorNameEl.value.trim() || this._editorLocalName;
+        if (!name) { this.editorHint('Enter a filename to save.'); this.editorNameEl.focus(); return; }
+        const files = localEditorFiles();
+        files[name] = content;
+        try { localStorage.setItem(LOCAL_EDITOR_KEY, JSON.stringify(files)); }
+        catch (e) { throw new Error('local storage is unavailable'); }
+        this._editorLocalName = name;
+        this._editorOriginal = content;
+        this.editorFileEl.textContent = name;
+        this.editorSaveBar.hidden = true;
+        this.editorHint(`Saved ${name} locally (this browser)`);
+        this.editorArea.focus();
+        return;
+      }
+      const isNew = !this._editorPath;
+      let path = this._editorPath;
+      if (!path) {
+        const name = this.editorNameEl.value.trim();
+        if (!name) { this.editorHint('Enter a filename to save.'); this.editorNameEl.focus(); return; }
+        path = this.github.resolve(name).join('/');
+      }
+      const message = this.pendingMessage || this.editorMsgEl.value.trim() ||
+                      `${isNew ? 'Create' : 'Update'} ${path}`;
       await this.commit([{ path, content }], message);
       if (this.pendingMessage) this.pendingMessage = null;
       this._editorPath = path;
@@ -1830,6 +1869,8 @@ class QCli {
     this.editorSaveBar.hidden = true;
     this._editorDiscardArmed = false;
     this._editorPath = null;
+    this._editorLocal = false;
+    this._editorLocalName = '';
     this._editorOriginal = '';
     if (this.inputEl) this.inputEl.focus();
   }
@@ -2171,7 +2212,7 @@ class QCli {
     add('putdir',   'putdir [path]',           'Upload a folder recursively',              this.cmdPutDir);
     add('download', 'download <file> [as <name>]', 'Save a repo file to your computer',      this.cmdDownload);
     add('get',      'download <file> [as <name>]', 'Alias for download',                    this.cmdDownload);
-    add('editor',  'editor [file]',            'Open a nano-like editor (new file if omitted)', this.cmdEditor);
+    add('editor',  'editor [file]',            'Open nano editor (local draft when signed out / no repo)', this.cmdEditor);
     add('nano',    'editor [file]',            'Alias for editor',                     this.cmdEditor);
     add('rm',      'rm [-r] <path>',           'Delete file or directory tree',        this.cmdRm);
     add('cp',      'cp [-r] <src> <dst>',      'Copy file or directory tree',          this.cmdCp);

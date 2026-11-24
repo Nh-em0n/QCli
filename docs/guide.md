@@ -552,11 +552,11 @@ It is off by default, persists in `localStorage`, and can also be switched with
 | `grep [-n] [-i] <pattern> <file>` | Search inside a file (`-n` line numbers, `-i` case-insensitive) | `grep -ni "todo" app.js` |
 | `find <pattern>` | Find filenames (supports `*` wildcards, case-insensitive); matches are paged 10 at a time and numbered `f1`, `f2`, … for use as file refs | `find *.png` → Space for more → `show f3` |
 | `chmod <path>` | Explain GitHub's file mode model (informational only) | `chmod script.sh` |
-| `editor [file]` / `nano [file]` | Open a nano-like text editor; loads the file if it exists, otherwise starts empty | `editor notes.txt` |
+| `editor [file]` / `nano [file]` | Open a nano-like text editor; loads the file if it exists, otherwise starts empty. Works without signing in or selecting a repo (local draft) | `editor notes.txt` |
 
 `find` shows results 10 at a time: press **Space** for the next 10, or **q** / **Ctrl+X** to return to the command line. Each match gets an `f1`, `f2`, … index beside it; those references work anywhere a file path is accepted — `show f3`, `cat f1`, `info f2`, `download f4` — until the next `find`. A real file named `f3` takes precedence over the reference.
 
-`show` renders text files in a full-width, numbered code view (at least 150px tall): long lines wrap to the window width instead of scrolling sideways, and the text uses a minimum 14px font. Each line has a line number and tokens are coloured by language (JavaScript, TypeScript, Python, HTML/XML, CSS, JSON, YAML, SQL, Markdown, shell, C/C++/Java/Go/Rust, diff, and more). The language is inferred from the file extension; unknown types still get line numbers with plain text. The **Copy** button in the view header copies the original file text, not the highlighted markup. `cat` remains raw output.
+`show` renders text files in a full-width, numbered code view (at least 150px tall, at most `70vh`): long lines wrap to the window width instead of scrolling sideways, and text taller than the view scrolls inside it. The text uses a minimum 14px font. Each line has a line number and tokens are coloured by language (JavaScript, TypeScript, Python, HTML/XML, CSS, JSON, YAML, SQL, Markdown, shell, C/C++/Java/Go/Rust, diff, and more). The language is inferred from the file extension; unknown types still get line numbers with plain text. The **Copy** button in the view header copies the original file text, not the highlighted markup. `cat` remains raw output.
 
 The editor wraps long lines to the window width with no horizontal scrolling; its line-number gutter follows the wrapped rows, and the view stays at the bottom while you type past the last visible line. On screens 1200px wide or more, the editor panel takes half the viewport width (`50vw`) and up to 720px height.
 
@@ -740,7 +740,13 @@ URL.
 editor README.md     # edit an existing file (content is loaded)
 editor notes.txt     # edit a file that doesn't exist yet (starts empty)
 editor               # empty editor — you choose the filename when saving
+nano                 # alias for editor
 ```
+
+The editor is always available — even in guest mode and before `select <repo>`.
+Without a token or a selected repository it opens a **local draft**; opening
+`nano notes.txt` again restores that draft from this browser's local storage.
+With both a token and a repo selected it loads and commits real repository files.
 
 | Key | Action |
 |---|---|
@@ -749,10 +755,12 @@ editor               # empty editor — you choose the filename when saving
 | <kbd>Tab</kbd> | Insert two spaces |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Move the caret; the line-number gutter follows |
 
-Saving runs a real GitHub commit, so the same commit-message rules apply: a
-queued `commit -m "..."` is used first, then the message typed in the save row,
-then `Update <path>`. The status bar at the bottom shows the keyboard hints and
-the current line/column. Requires a repository (`select <repo>` first).
+When a repository and token are available, saving runs a real GitHub commit, so
+the same commit-message rules apply: a queued `commit -m "..."` is used first,
+then the message typed in the save row, then `Update <path>`. For local drafts
+the message field is hidden and saving stores the text in this browser only.
+The status bar at the bottom shows the keyboard hints and the current
+line/column.
 
 ### Committing changes
 

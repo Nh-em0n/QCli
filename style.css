@@ -151,7 +151,11 @@
   }
   .code-copy:hover { background: var(--border); color: var(--fg); }
   .code-copy:focus-visible { outline: 2px solid var(--outline); outline-offset: 1px; }
-  .code-view { min-height: 150px; overflow-x: hidden; white-space: normal; }
+  /* Long files scroll inside the view; the terminal itself stays put. */
+  .code-view {
+    min-height: 150px; max-height: 70vh;
+    overflow-x: hidden; overflow-y: auto; white-space: normal;
+  }
   .code-line { display: flex; width: 100%; align-items: flex-start; }
   .code-line:hover { background: var(--surface-2); }
   .code-ln {
