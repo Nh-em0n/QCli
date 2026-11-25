@@ -2726,11 +2726,130 @@ class QCli {
     const p = segs.join('/');
     if (p) {
       const data = await this.github.getContent(p);
-      if (!data) return this.err(`cd: no such directory: ${target}`);
-      if (!Array.isArray(data)) return this.err(`cd: not a directory: ${target}`);
+      if (!data || !Array.isArray(data)) {
+        /* A URL (or typed path) can point at a file. Don't dead-end with an
+           error: enter its parent and show the file details instead. */
+        if (await this.cdToFileDetails(segs)) return;
+        if (!data) return this.err(`cd: no such directory: ${target}`);
+        return this.err(`cd: not a directory: ${target}`);
+      }
     }
     this.cwd = segs;
     await this.finishCd();
+  }
+
+
+  /* A cd target may name a file, be stale, or differ slightly from the real
+     name (common with URLs). Walk up through parent folders until one exists,
+     then look for the requested item there — as a direct child first, then
+     anywhere below it. Returns true when the path was handled. */
+  async cdToFileDetails(segs) {
+    if (!segs.length) return false;
+    const name = segs[segs.length - 1];
+    let tree = null;
+    const getTree = async () => {
+      if (tree === null) {
+        try { tree = await this.branchTree(); }
+        catch (_) { tree = []; }
+      }
+      return tree;
+    };
+
+    let nearestParent = null;
+    for (let cut = segs.length - 1; cut >= 0; cut--) {
+      const parent = segs.slice(0, cut);
+      const parentPath = parent.join('/');
+      const data = await this.github.getContent(parentPath);
+      if (!Array.isArray(data)) continue;   // not a folder — try its parent
+      if (!nearestParent) nearestParent = parent;
+      const entries = await this.listEntries(parentPath, { data });
+      let hit = this.matchNamedEntry(entries, name);
+      if (hit) hit.dir = parentPath;
+      if (!hit) hit = await this.findNamedEntryBelow(parentPath, name, await getTree());
+      if (!hit) continue;
+
+      this.cwd = String(hit.dir || '').split('/').filter(Boolean);
+      await this.finishCd();
+      if (hit.type === 'dir') {
+        this.info(`${hit.name} is a folder — opened it from ${this.github.pwd()}`);
+      } else {
+        this.info(`${hit.name} is a file — showing its details from ${this.github.pwd()}`);
+        await this.cmdInfo([hit.name]);
+      }
+      return true;
+    }
+
+    /* Nothing matched: open the nearest folder that does exist instead of
+       ending with an error, so the listing shows what is available. */
+    if (nearestParent) {
+      this.cwd = nearestParent;
+      this.updateStatus();
+      this.syncUrl();
+      this.warn(`No match for "${name}" — opened nearest existing folder: ${this.github.pwd()}`);
+      await this.cmdLs([]);
+      return true;
+    }
+    return false;
+  }
+
+
+  normalizeEntryName(s) {
+    return String(s == null ? '' : s).toLowerCase().replace(/\.[a-z0-9]+$/i, '').trim();
+  }
+
+
+  /* Same matching used by `find`: escape regex metacharacters, treat * as a
+     wildcard, and compare case-insensitively. */
+  namePattern(name) {
+    const s = String(name == null ? '' : name);
+    let re;
+    try { re = new RegExp(s.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'), 'i'); }
+    catch (_) { re = new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    return re;
+  }
+
+
+  /* Ranked match so an exact hit wins over a partial one. Partial matching is
+     what makes `.../toxicant` find `toxicant_based_on_source.jpeg`, just like
+     `find toxicant` does. Lower score is better; -1 means no match. */
+  nameMatchScore(entryName, name) {
+    const a = String(entryName == null ? '' : entryName);
+    const b = String(name == null ? '' : name);
+    if (!b) return -1;
+    if (a === b) return 0;
+    const al = a.toLowerCase(), bl = b.toLowerCase();
+    if (al === bl) return 1;
+    if (this.normalizeEntryName(a) === this.normalizeEntryName(b)) return 2;
+    if (al.startsWith(bl)) return 3;
+    if (this.namePattern(b).test(a)) return 4;
+    return -1;
+  }
+
+
+  matchNamedEntry(entries, name) {
+    let best = null, bestScore = Infinity;
+    for (const e of entries) {
+      const score = this.nameMatchScore(e.name, name);
+      if (score >= 0 && score < bestScore) { best = e; bestScore = score; }
+    }
+    return best;
+  }
+
+
+  /* Recursive search for the missing item inside an existing folder. */
+  findNamedEntryBelow(parentPath, name, tree) {
+    if (!Array.isArray(tree)) return null;
+    const prefix = parentPath ? parentPath + '/' : '';
+    const hits = tree
+      .filter((e) => e.type === 'blob' && e.path.startsWith(prefix))
+      .map((e) => ({ e, score: this.nameMatchScore(e.path.split('/').pop(), name) }))
+      .filter((x) => x.score >= 0)
+      .sort((x, y) => x.score - y.score
+        || x.e.path.split('/').length - y.e.path.split('/').length
+        || x.e.path.localeCompare(y.e.path));
+    if (!hits.length) return null;
+    const bits = hits[0].e.path.split('/');
+    return { name: bits.pop(), dir: bits.join('/'), type: 'file' };
   }
 
 
@@ -2769,7 +2888,7 @@ class QCli {
   async listEntries(pathStr, opts = {}) {
     const key = this.dirCacheKey(pathStr);
     if (!opts.refresh && this._dirCache.has(key)) return this._dirCache.get(key);
-    const data = await this.github.getContent(pathStr || '');
+    const data = opts.data !== undefined ? opts.data : await this.github.getContent(pathStr || '');
     if (!data) { this._dirCache.delete(key); return null; }
     const rows = Array.isArray(data) ? data.slice() : [data];
     rows.sort((a, b) => {

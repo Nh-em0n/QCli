@@ -492,6 +492,18 @@ Each numeric segment is resolved against a cached listing of that directory
 is numeric is used as-is when its index is out of range. Quote names containing
 spaces as usual: `cd "folder a"`.
 
+If a path names a file instead of a folder, or its final segment is missing or
+slightly different from the real name (for example a `?path=` value in the URL
+such as `CRUD/C PRO/01.Introduction/05.Local paths vs remote paths`), `cd`
+walks up to the nearest folder that does exist and looks for the item there —
+first as a direct child, then anywhere inside that folder. Names are matched
+like `find`: case-insensitively, with `*` as a wildcard and partial names
+allowed, so `.../toxicant` finds `toxicant_based_on_source.jpeg`. Exact matches
+win over partial ones. When found, it prints the file's details table, the same
+output as `info <n>`. If nothing matches, it opens that nearest folder and lists
+it instead of stopping with an error. The URL is updated to the folder that was
+entered.
+
 **Every command that takes a file reference accepts a name, a path, or an
 `ls` index** (including nested indexes like `docs/2`):
 
